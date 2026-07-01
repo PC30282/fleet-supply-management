@@ -1,0 +1,18 @@
+{
+  "name": "Tamworth Vehicle Supplies",
+  "short_name": "Fleet Supplies",
+  "description": "Fleet vehicle supply requests for Tamworth.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f7f2",
+  "theme_color": "#2c3037",
+  "icons": [
+    {
+      "src": "assets/Fleet-Management-Logo.png",
+      "sizes": "192x192 512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
