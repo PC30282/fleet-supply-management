@@ -11,16 +11,17 @@ A responsive prototype for managing fleet vehicle supply requests at a police st
 ## Current features
 
 - Submit resupply requests from phone or desktop
+- Record the requester by collar number
 - View a live request dashboard
 - Filter by request status
-- Search by item, vehicle, requester, or notes
-- Warn users when an item has already been requested recently
+- Search by item, vehicle, collar number, or notes
+- Warn users when an item has already been requested recently and show that matching request on the dashboard
 - Supervisor mode for changing status or deleting requests
 
 ## Request statuses
 
-- Request made
-- Request ordered
+- Pending
+- Ordered
 - Delivered
 - Cancelled
 
