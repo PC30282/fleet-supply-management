@@ -1,0 +1,52 @@
+name: Add Fleet Status link
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/add-status-link.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: site
+
+      - name: Add Fleet Status link to supply page
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('site/index.html')
+          text = path.read_text(encoding='utf-8')
+          old = '<div class="admin-wrap"><span class="admin-pill" id="accessState">View only</span>'
+          new = '<div class="admin-wrap"><a class="quiet-button" href="fleet-status.html">Fleet Status</a><span class="admin-pill" id="accessState">View only</span>'
+          if new in text:
+              print('Fleet Status link already present')
+          elif old in text:
+              text = text.replace(old, new, 1)
+              path.write_text(text, encoding='utf-8')
+          else:
+              raise SystemExit('Header admin area not found')
+          PY
+
+      - name: Commit and push gh-pages change
+        run: |
+          cd site
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "No changes to commit"
+          else
+            git add index.html
+            git commit -m "Add Fleet Status link to supply page"
+            git push origin gh-pages
+          fi
