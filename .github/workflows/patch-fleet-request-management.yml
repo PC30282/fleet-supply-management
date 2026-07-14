@@ -1,0 +1,77 @@
+name: Patch Fleet Status request management
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/patch-fleet-request-management.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: site
+
+      - name: Add Fleet Status request management
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          page = Path('site/fleet-status.html')
+          text = page.read_text(encoding='utf-8')
+          original = text
+
+          def replace_once(old, new, label):
+              global text
+              if old not in text:
+                  raise SystemExit(f'Missing expected text for {label}')
+              text = text.replace(old, new, 1)
+
+          if '.fact small{' not in text:
+              replace_once('.fact strong{display:block;font-size:.98rem;overflow-wrap:anywhere}', '.fact strong{display:block;font-size:.98rem;overflow-wrap:anywhere}.fact small{display:block;margin-top:4px}', 'last checklist small spacing')
+
+          if '.request-manage{' not in text:
+              replace_once('.request-card h4{margin:0}.request-card p{margin:0;color:var(--muted);font-size:.86rem}', '.request-card h4{margin:0}.request-card p{margin:0;color:var(--muted);font-size:.86rem}.request-manage{display:none;grid-template-columns:minmax(0,220px) auto;gap:9px;align-items:center}.request-manage select{min-height:40px}.request-manage .danger-button{min-height:40px}body.admin-on .request-manage{display:grid}', 'request manage styles')
+
+          old_card = 'function renderDetail(){const v=selectedVehicle();'
+          if 'function requestStatusOptions(' not in text:
+              helper = 'function requestStatusOptions(status){return ["Pending","Ordered","Delivered","Cancelled"].map(option=>`<option value="${option}" ${option===status?"selected":""}>${option}</option>`).join("")}\n'
+              replace_once(old_card, helper + old_card, 'request status helper')
+
+          old_request = '<article class="request-card" data-status="${escapeHtml(r.status)}"><h4>${escapeHtml(r.item)}</h4><p>Qty ${escapeHtml(r.quantity)} - ${escapeHtml(r.status)} - Collar ${escapeHtml(r.requester)} - ${escapeHtml(formatDate(r.created_at))}</p>${r.notes?`<p>${escapeHtml(r.notes)}</p>`:""}</article>'
+          new_request = '<article class="request-card" data-status="${escapeHtml(r.status)}"><h4>${escapeHtml(r.item)}</h4><p>Qty ${escapeHtml(r.quantity)} - ${escapeHtml(r.status)} - Collar ${escapeHtml(r.requester)} - ${escapeHtml(formatDate(r.created_at))}</p>${r.notes?`<p>${escapeHtml(r.notes)}</p>`:""}<div class="request-manage"><select data-request-status="${escapeHtml(r.id)}">${requestStatusOptions(r.status)}</select><button class="danger-button" data-delete-request="${escapeHtml(r.id)}" type="button">Delete</button></div></article>'
+          if 'data-request-status' not in text:
+              replace_once(old_request, new_request, 'request management controls')
+
+          if 'async function updateRequestStatus(' not in text:
+              replace_once('async function deleteChecklist(id){if(!adminUnlocked)return;if(!confirm("Delete this checklist record?"))return;await check(await db.from("fleet_checklists").delete().eq("id",id),"Deleting checklist");await loadData();showToast("Checklist deleted.")}', 'async function deleteChecklist(id){if(!adminUnlocked)return;if(!confirm("Delete this checklist record?"))return;await check(await db.from("fleet_checklists").delete().eq("id",id),"Deleting checklist");await loadData();showToast("Checklist deleted.")}async function updateRequestStatus(id,status){if(!adminUnlocked)return;await check(await db.from("requests").update({status}).eq("id",id),"Updating request");await loadData();showToast("Request status updated.")}async function deleteRequest(id){if(!adminUnlocked)return;const request=requests.find(r=>r.id===id);if(!confirm(`Delete ${request?.item||"this request"}?`))return;await check(await db.from("requests").delete().eq("id",id),"Deleting request");await loadData();showToast("Request deleted.")}', 'request management functions')
+
+          old_click = 'vehicleDetail.addEventListener("click",e=>{const status=e.target.closest("[data-update-status]"),check=e.target.closest("[data-record-checklist]"),deleteCheck=e.target.closest("[data-delete-checklist]");if(status)updateStatus(status.dataset.updateStatus);if(check)recordChecklist(check.dataset.recordChecklist);if(deleteCheck)deleteChecklist(deleteCheck.dataset.deleteChecklist)});'
+          new_click = 'vehicleDetail.addEventListener("click",e=>{const status=e.target.closest("[data-update-status]"),check=e.target.closest("[data-record-checklist]"),deleteCheck=e.target.closest("[data-delete-checklist]"),deleteReq=e.target.closest("[data-delete-request]");if(status)updateStatus(status.dataset.updateStatus);if(check)recordChecklist(check.dataset.recordChecklist);if(deleteCheck)deleteChecklist(deleteCheck.dataset.deleteChecklist);if(deleteReq)deleteRequest(deleteReq.dataset.deleteRequest)});vehicleDetail.addEventListener("change",e=>{const requestStatus=e.target.closest("[data-request-status]");if(requestStatus)updateRequestStatus(requestStatus.dataset.requestStatus,requestStatus.value)});'
+          if 'data-delete-request' in text and 'updateRequestStatus(requestStatus.dataset.requestStatus' not in text:
+              replace_once(old_click, new_click, 'request event handlers')
+
+          if text == original:
+              raise SystemExit('No changes made')
+          page.write_text(text, encoding='utf-8')
+
+          refresh = Path('site/.pages-refresh')
+          refresh.write_text('Refreshed GitHub Pages deployment on 2026-07-14 after Fleet Status request management update.\n', encoding='utf-8')
+          PY
+
+      - name: Commit and push gh-pages change
+        run: |
+          cd site
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add fleet-status.html .pages-refresh
+          git commit -m "Add Fleet Status request management"
+          git push origin gh-pages
