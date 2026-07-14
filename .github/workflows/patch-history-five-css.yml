@@ -1,4 +1,4 @@
-name: Patch checklist history visible limit
+name: Patch fleet checklist history request summary
 
 on:
   push:
@@ -21,17 +21,27 @@ jobs:
           ref: gh-pages
           path: site
 
-      - name: Limit checklist history to five visible records
+      - name: Add checklist history request summary
         run: |
           python - <<'PY'
           from pathlib import Path
           path = Path('site/fleet-status.html')
           text = path.read_text(encoding='utf-8')
-          rule = '.history-list .history-card:nth-of-type(n+6){display:none}'
-          if rule not in text:
-              text = text.replace('.history-card .danger-button{display:none;min-height:38px}', rule + '.history-card .danger-button{display:none;min-height:38px}', 1)
-              path.write_text(text, encoding='utf-8')
-          Path('site/.pages-refresh').write_text('Refreshed GitHub Pages deployment on 2026-07-14 after checklist history visible limit.\n', encoding='utf-8')
+
+          old_functions = 'function vehicleRequests(v){const vrm=normaliseVrm(v?.vrm);return requests.filter(r=>normaliseVrm(r.vehicle)===vrm&&r.status!=="Cancelled")}function vehicleChecklists(v){const vrm=normaliseVrm(v?.vrm);return checklists.filter(c=>c.vehicle_id===v?.id||normaliseVrm(c.vehicle_vrm)===vrm)}function latestChecklist(v){return vehicleChecklists(v)[0]||null}'
+          new_functions = 'function vehicleRequests(v){const vrm=normaliseVrm(v?.vrm);return requests.filter(r=>normaliseVrm(r.vehicle)===vrm&&r.status!=="Cancelled")}function vehicleChecklists(v){const vrm=normaliseVrm(v?.vrm);return checklists.filter(c=>c.vehicle_id===v?.id||normaliseVrm(c.vehicle_vrm)===vrm)}function checklistRequests(v,c){const vrm=normaliseVrm(v?.vrm),completed=c?.completed_at?new Date(c.completed_at).getTime():0;if(!completed)return[];return requests.filter(r=>normaliseVrm(r.vehicle)===vrm&&String(r.notes||"").toLowerCase().includes("generated from vehicle checklist")&&Math.abs(new Date(r.created_at).getTime()-completed)<=600000)}function checklistRequestSummary(v,c){const matched=checklistRequests(v,c);return matched.length?`Items requested: ${matched.map(r=>`${r.item} (Qty ${r.quantity})`).join(", ")}`:"Nothing required"}function latestChecklist(v){return vehicleChecklists(v)[0]||null}'
+          if old_functions not in text:
+              raise SystemExit('Could not find vehicle/checklist helper functions to patch')
+          text = text.replace(old_functions, new_functions, 1)
+
+          old_history = '${c.notes?`<p>${escapeHtml(c.notes)}</p>`:""}</article>`).join("")||`<div class="empty">No checklists recorded for this vehicle.</div>`}'
+          new_history = '${c.notes?`<p>${escapeHtml(c.notes)}</p>`:""}<p>${escapeHtml(checklistRequestSummary(v,c))}</p></article>`).join("")||`<div class="empty">No checklists recorded for this vehicle.</div>`}'
+          if old_history not in text:
+              raise SystemExit('Could not find checklist history card markup to patch')
+          text = text.replace(old_history, new_history, 1)
+
+          Path('site/.pages-refresh').write_text('Refreshed GitHub Pages deployment on 2026-07-14 after checklist history request summary.\n', encoding='utf-8')
+          path.write_text(text, encoding='utf-8')
           PY
 
       - name: Commit and push gh-pages change
@@ -40,5 +50,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add fleet-status.html .pages-refresh
-          git commit -m "Limit visible checklist history to five records"
+          git commit -m "Show checklist history request summary"
           git push origin gh-pages
