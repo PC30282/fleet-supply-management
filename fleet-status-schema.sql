@@ -30,7 +30,7 @@ grant usage on schema public to anon, authenticated;
 grant select on public.fleet_vehicles to anon, authenticated;
 grant select on public.fleet_checklists to anon, authenticated;
 grant insert, update, delete on public.fleet_vehicles to authenticated;
-grant insert on public.fleet_checklists to authenticated;
+grant insert on public.fleet_checklists to anon, authenticated;
 
 drop policy if exists "Fleet vehicles are readable" on public.fleet_vehicles;
 create policy "Fleet vehicles are readable"
@@ -52,9 +52,10 @@ create policy "Fleet checklists are readable"
   using (true);
 
 drop policy if exists "Supervisors can record fleet checklists" on public.fleet_checklists;
-create policy "Supervisors can record fleet checklists"
+drop policy if exists "Public users can record fleet checklists" on public.fleet_checklists;
+create policy "Public users can record fleet checklists"
   on public.fleet_checklists for insert
-  to authenticated
+  to anon, authenticated
   with check (true);
 
 create index if not exists fleet_vehicles_sort_idx on public.fleet_vehicles(sort_order, vrm);
