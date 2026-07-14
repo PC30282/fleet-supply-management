@@ -1,0 +1,89 @@
+name: Patch VRM suggestions
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/patch-vrm-suggestions.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: site
+
+      - name: Add Fleet VRM suggestions
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('site/index.html')
+          text = path.read_text(encoding='utf-8')
+          original = text
+
+          def must_replace(old, new, label):
+              global text
+              if old not in text:
+                  raise SystemExit(f'Missing expected text for {label}')
+              text = text.replace(old, new, 1)
+
+          old_vehicle = '<input id="vehicle" autocomplete="off" placeholder="Enter fleet vehicle VRM">'
+          new_vehicle = '<input id="vehicle" autocomplete="off" list="fleetVrmOptions" placeholder="Enter fleet vehicle VRM">'
+          if 'list="fleetVrmOptions"' not in text:
+              must_replace(old_vehicle, new_vehicle, 'individual VRM datalist')
+
+          old_checklist = '<input id="checklistVrm" autocomplete="off" placeholder="Enter fleet vehicle VRM">'
+          new_checklist = '<input id="checklistVrm" autocomplete="off" list="fleetVrmOptions" placeholder="Enter fleet vehicle VRM">'
+          if 'id="checklistVrm" autocomplete="off" list="fleetVrmOptions"' not in text:
+              must_replace(old_checklist, new_checklist, 'checklist VRM datalist')
+
+          datalist = '<datalist id="fleetVrmOptions"></datalist>'
+          if datalist not in text:
+              must_replace('<dialog id="adminDialog">', datalist + '\n<dialog id="adminDialog">', 'VRM datalist element')
+
+          old_state = 'let currentSection="First aid Supplies",vehicleMode="individual",itemRecords=[],requests=[],itemDrafts=[],draftDirty=false,adminUnlocked=false,refreshing=false,supervisorUser=null,namePromptOpen=false,supportsRequiredQuantity=true,supportsSubItems=true,supportsSettings=true,settings={notification_frequency:"disabled",notification_email:""};'
+          new_state = 'let currentSection="First aid Supplies",vehicleMode="individual",itemRecords=[],requests=[],fleetVehicles=[],itemDrafts=[],draftDirty=false,adminUnlocked=false,refreshing=false,supervisorUser=null,namePromptOpen=false,supportsRequiredQuantity=true,supportsSubItems=true,supportsSettings=true,settings={notification_frequency:"disabled",notification_email:""};'
+          if 'fleetVehicles=[]' not in text:
+              must_replace(old_state, new_state, 'fleet vehicle state')
+
+          old_refs = 'notificationNote=$("#notificationNote"),checklistVrm=$("#checklistVrm"),checklistRequester=$("#checklistRequester"),checklistNotes=$("#checklistNotes");'
+          new_refs = 'notificationNote=$("#notificationNote"),checklistVrm=$("#checklistVrm"),checklistRequester=$("#checklistRequester"),checklistNotes=$("#checklistNotes"),fleetVrmOptions=$("#fleetVrmOptions");'
+          if 'fleetVrmOptions=$("#fleetVrmOptions")' not in text:
+              must_replace(old_refs, new_refs, 'fleet VRM datalist reference')
+
+          old_load_requests = 'async function loadItems(){let data=await loadOrderItems();if(!data.length){await seedItemsIfEmpty();data=await loadOrderItems()}itemRecords=data.map(item=>({...item,required_quantity:item.required_quantity??null,sub_items:item.sub_items??""}))}async function loadRequests(){requests=await checkError(await db.from("requests").select("id,section,item,vehicle,quantity,requester,notes,status,created_at").order("created_at",{ascending:false}),"Loading requests")}\n'
+          new_load_requests = 'async function loadItems(){let data=await loadOrderItems();if(!data.length){await seedItemsIfEmpty();data=await loadOrderItems()}itemRecords=data.map(item=>({...item,required_quantity:item.required_quantity??null,sub_items:item.sub_items??""}))}async function loadRequests(){requests=await checkError(await db.from("requests").select("id,section,item,vehicle,quantity,requester,notes,status,created_at").order("created_at",{ascending:false}),"Loading requests")}async function loadFleetVehicles(){const result=await db.from("fleet_vehicles").select("vrm").order("sort_order").order("vrm");if(result.error){console.warn("Loading fleet vehicles",result.error);fleetVehicles=[];renderFleetVrmOptions();return}fleetVehicles=[...new Set(result.data.map(row=>formatVrm(row.vrm)).filter(Boolean))];renderFleetVrmOptions()}function renderFleetVrmOptions(){fleetVrmOptions.innerHTML=fleetVehicles.map(vrm=>`<option value="${escapeHtml(vrm)}"></option>`).join("")}\n'
+          if 'async function loadFleetVehicles()' not in text:
+              must_replace(old_load_requests, new_load_requests, 'fleet vehicle loader')
+
+          old_refresh = 'await loadItems();await loadRequests();await loadSettings();renderItems();'
+          new_refresh = 'await loadItems();await loadRequests();await loadFleetVehicles();await loadSettings();renderItems();'
+          if 'await loadFleetVehicles();await loadSettings();' not in text:
+              must_replace(old_refresh, new_refresh, 'refresh fleet vehicles')
+
+          old_subscribe = '.on("postgres_changes",{event:"*",schema:"public",table:"app_settings"},()=>loadSettings()).subscribe();'
+          new_subscribe = '.on("postgres_changes",{event:"*",schema:"public",table:"app_settings"},()=>loadSettings()).on("postgres_changes",{event:"*",schema:"public",table:"fleet_vehicles"},()=>loadFleetVehicles()).subscribe();'
+          if 'table:"fleet_vehicles"' not in text:
+              must_replace(old_subscribe, new_subscribe, 'fleet vehicle live refresh')
+
+          if text == original:
+              raise SystemExit('No changes made')
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Commit and push gh-pages change
+        run: |
+          cd site
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          git commit -m "Suggest Fleet VRMs on request forms"
+          git push origin gh-pages
