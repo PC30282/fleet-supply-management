@@ -25,33 +25,65 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-          import re
           page = Path('site/fleet-status.html')
           text = page.read_text(encoding='utf-8')
 
-          text = text.replace('.pill.neutral{background:#eef1f4;color:var(--muted)}a.button,.primary-button,.quiet-button,.danger-button,.icon-button{min-height:42px;display:inline-flex;align-items:center;justify-content:center;gap:8px;border-radius:8px;font-weight:800;text-decoration:none}', '.pill.neutral{background:#eef1f4;color:var(--muted)}.status-select{width:auto;min-height:38px;border-radius:999px;padding:7px 32px 7px 12px;font-weight:900;font-size:.78rem;border:0}.status-select.on{background:var(--green2);color:var(--green)}.status-select.reported{background:var(--amber2);color:var(--amber)}.status-select.off{background:var(--red2);color:var(--red)}a.button,.primary-button,.quiet-button,.danger-button,.icon-button{min-height:42px;display:inline-flex;align-items:center;justify-content:center;gap:8px;border-radius:8px;font-weight:800;text-decoration:none}', 1)
+          marker = '.pill.neutral{background:#eef1f4;color:var(--muted)}'
+          if '.status-select{' not in text:
+              if marker not in text:
+                  raise SystemExit('CSS marker not found')
+              text = text.replace(marker, marker + '.status-select{width:auto;min-height:38px;border-radius:999px;padding:7px 32px 7px 12px;font-weight:900;font-size:.78rem;border:0}.status-select.on{background:var(--green2);color:var(--green)}.status-select.reported{background:var(--amber2);color:var(--amber)}.status-select.off{background:var(--red2);color:var(--red)}', 1)
 
+          req_helper = 'function requestStatusOptions(status){return ["Pending","Ordered","Delivered","Cancelled"].map(option=>`<option value="${option}" ${option===status?"selected":""}>${option}</option>`).join("")}'
           if 'function vehicleStatusOptions(status)' not in text:
-              text = text.replace('function requestStatusOptions(status){return ["Pending","Ordered","Delivered","Cancelled"].map(option=>`<option value="${option}" ${option===status?"selected":""}>${option}</option>`).join("")}', 'function requestStatusOptions(status){return ["Pending","Ordered","Delivered","Cancelled"].map(option=>`<option value="${option}" ${option===status?"selected":""}>${option}</option>`).join("")}function vehicleStatusOptions(status){return ["On-Road","Reported","Off-Road"].map(option=>`<option value="${option}" ${option===status?"selected":""}>${option}</option>`).join("")}', 1)
+              if req_helper not in text:
+                  raise SystemExit('Request status helper not found')
+              text = text.replace(req_helper, req_helper + 'function vehicleStatusOptions(status){return ["On-Road","Reported","Off-Road"].map(option=>`<option value="${option}" ${option===status?"selected":""}>${option}</option>`).join("")}', 1)
 
-          text = text.replace('<span class="pill ${statusClass(v.status)}">${escapeHtml(v.status)}</span></div></div><div class="detail-grid">', '<select class="status-select ${statusClass(v.status)}" data-vehicle-status="${escapeHtml(v.id)}" aria-label="Vehicle status">${vehicleStatusOptions(v.status)}</select></div></div><div class="detail-grid">', 1)
+          old_pill = '<span class="pill ${statusClass(v.status)}">${escapeHtml(v.status)}</span>'
+          new_dropdown = '<select class="status-select ${statusClass(v.status)}" data-vehicle-status="${escapeHtml(v.id)}" aria-label="Vehicle status">${vehicleStatusOptions(v.status)}</select>'
+          if 'data-vehicle-status' not in text:
+              if old_pill not in text:
+                  raise SystemExit('Detail status pill not found')
+              text = text.replace(old_pill, new_dropdown, 1)
 
-          text, removed = re.subn(r'<section class="admin-panel"><div class="section-title"><h3>Supervisor actions</h3>.*?</section>`}', '`}', text, count=1)
-          if removed == 0 and 'Supervisor actions' in text:
-              raise SystemExit('Could not remove supervisor actions section')
+          block_start = '<section class="admin-panel"><div class="section-title"><h3>Supervisor actions</h3>'
+          if block_start in text:
+              start = text.index(block_start)
+              end = text.index('`}', start)
+              text = text[:start] + text[end:]
+          if 'Supervisor actions' in text:
+              raise SystemExit('Supervisor actions block still present')
 
-          text = text.replace('async function updateStatus(id){const status=$("#detailStatus")?.value;if(!status)return;await check(await db.from("fleet_vehicles").update({status,status_updated_at:new Date().toISOString(),status_updated_by:supervisorName()}).eq("id",id),"Updating status");await loadData();showToast("Vehicle status updated.")}async function recordChecklist(id){const v=vehicles.find(x=>x.id===id),by=$("#checklistBy")?.value.trim()||supervisorName();if(!v)return;await check(await db.from("fleet_checklists").insert({vehicle_id:v.id,vehicle_vrm:formatVrm(v.vrm),completed_by:by}),"Recording checklist");await loadData();showToast("Checklist recorded.")}', 'async function updateVehicleStatus(id,status){const v=vehicles.find(x=>x.id===id);if(!v)return;const collar=prompt(`Enter your collar number to mark ${formatVrm(v.vrm)} as ${status}:`);if(!collar||!collar.trim()){render();return}const clean=collar.trim().replace(/[^0-9A-Za-z]/g,"");if(!clean){render();showToast("Collar number is required.");return}await check(await db.rpc("update_fleet_vehicle_status",{vehicle_id:id,new_status:status,collar_number:clean}),"Updating status");await loadData();showToast("Vehicle status updated.")}async function recordChecklist(id){const v=vehicles.find(x=>x.id===id),by=supervisorName();if(!v)return;await check(await db.from("fleet_checklists").insert({vehicle_id:v.id,vehicle_vrm:formatVrm(v.vrm),completed_by:by}),"Recording checklist");await loadData();showToast("Checklist recorded.")}', 1)
+          old_update = 'async function updateStatus(id){const status=$("#detailStatus")?.value;if(!status)return;await check(await db.from("fleet_vehicles").update({status,status_updated_at:new Date().toISOString(),status_updated_by:supervisorName()}).eq("id",id),"Updating status");await loadData();showToast("Vehicle status updated.")}'
+          new_update = 'async function updateVehicleStatus(id,status){const v=vehicles.find(x=>x.id===id);if(!v)return;const collar=prompt(`Enter your collar number to mark ${formatVrm(v.vrm)} as ${status}:`);if(!collar||!collar.trim()){render();return}const clean=collar.trim().replace(/[^0-9A-Za-z]/g,"");if(!clean){render();showToast("Collar number is required.");return}await check(await db.rpc("update_fleet_vehicle_status",{vehicle_id:id,new_status:status,collar_number:clean}),"Updating status");await loadData();showToast("Vehicle status updated.")}'
+          if 'async function updateVehicleStatus' not in text:
+              if old_update not in text:
+                  raise SystemExit('Old updateStatus function not found')
+              text = text.replace(old_update, new_update, 1)
 
-          text = text.replace('vehicleDetail.addEventListener("click",e=>{const status=e.target.closest("[data-update-status]"),check=e.target.closest("[data-record-checklist]"),deleteCheck=e.target.closest("[data-delete-checklist]"),deleteReq=e.target.closest("[data-delete-request]");if(status)updateStatus(status.dataset.updateStatus);if(check)recordChecklist(check.dataset.recordChecklist);if(deleteCheck)deleteChecklist(deleteCheck.dataset.deleteChecklist);if(deleteReq)deleteRequest(deleteReq.dataset.deleteRequest)});vehicleDetail.addEventListener("change",e=>{const requestStatus=e.target.closest("[data-request-status]");if(requestStatus)updateRequestStatus(requestStatus.dataset.requestStatus,requestStatus.value)});', 'vehicleDetail.addEventListener("click",e=>{const deleteCheck=e.target.closest("[data-delete-checklist]"),deleteReq=e.target.closest("[data-delete-request]");if(deleteCheck)deleteChecklist(deleteCheck.dataset.deleteChecklist);if(deleteReq)deleteRequest(deleteReq.dataset.deleteRequest)});vehicleDetail.addEventListener("change",e=>{const vehicleStatus=e.target.closest("[data-vehicle-status]"),requestStatus=e.target.closest("[data-request-status]");if(vehicleStatus){updateVehicleStatus(vehicleStatus.dataset.vehicleStatus,vehicleStatus.value);return}if(requestStatus)updateRequestStatus(requestStatus.dataset.requestStatus,requestStatus.value)});', 1)
+          old_click = 'vehicleDetail.addEventListener("click",e=>{const status=e.target.closest("[data-update-status]"),check=e.target.closest("[data-record-checklist]"),deleteCheck=e.target.closest("[data-delete-checklist]"),deleteReq=e.target.closest("[data-delete-request]");if(status)updateStatus(status.dataset.updateStatus);if(check)recordChecklist(check.dataset.recordChecklist);if(deleteCheck)deleteChecklist(deleteCheck.dataset.deleteChecklist);if(deleteReq)deleteRequest(deleteReq.dataset.deleteRequest)});'
+          new_click = 'vehicleDetail.addEventListener("click",e=>{const deleteCheck=e.target.closest("[data-delete-checklist]"),deleteReq=e.target.closest("[data-delete-request]");if(deleteCheck)deleteChecklist(deleteCheck.dataset.deleteChecklist);if(deleteReq)deleteRequest(deleteReq.dataset.deleteRequest)});'
+          if old_click in text:
+              text = text.replace(old_click, new_click, 1)
+          elif 'data-update-status' in text or 'data-record-checklist' in text:
+              raise SystemExit('Old click handler references still present')
 
-          if 'data-vehicle-status' not in text or 'Supervisor actions' in text or 'updateVehicleStatus' not in text:
-              raise SystemExit('Public status dropdown patch did not fully apply')
+          old_change = 'vehicleDetail.addEventListener("change",e=>{const requestStatus=e.target.closest("[data-request-status]");if(requestStatus)updateRequestStatus(requestStatus.dataset.requestStatus,requestStatus.value)});'
+          new_change = 'vehicleDetail.addEventListener("change",e=>{const vehicleStatus=e.target.closest("[data-vehicle-status]"),requestStatus=e.target.closest("[data-request-status]");if(vehicleStatus){updateVehicleStatus(vehicleStatus.dataset.vehicleStatus,vehicleStatus.value);return}if(requestStatus)updateRequestStatus(requestStatus.dataset.requestStatus,requestStatus.value)});'
+          if old_change in text:
+              text = text.replace(old_change, new_change, 1)
+          elif 'updateVehicleStatus(vehicleStatus.dataset.vehicleStatus' not in text:
+              raise SystemExit('Change handler not patched')
 
+          if 'data-vehicle-status' not in text or 'async function updateVehicleStatus' not in text:
+              raise SystemExit('Final page validation failed')
           page.write_text(text, encoding='utf-8')
 
           schema = Path('site/fleet-status-schema.sql')
           sql = schema.read_text(encoding='utf-8')
-          addition = '''
+          if 'update_fleet_vehicle_status' not in sql:
+              sql = sql.rstrip() + '''
 
 create or replace function public.update_fleet_vehicle_status(
   vehicle_id uuid,
@@ -86,8 +118,7 @@ $$;
 
 grant execute on function public.update_fleet_vehicle_status(uuid, text, text) to anon, authenticated;
 '''
-          if 'update_fleet_vehicle_status' not in sql:
-              schema.write_text(sql.rstrip() + addition + '\n', encoding='utf-8')
+              schema.write_text(sql + '\n', encoding='utf-8')
 
           Path('site/.pages-refresh').write_text('Refreshed GitHub Pages deployment on 2026-07-14 after public vehicle status dropdown update.\n', encoding='utf-8')
           PY
