@@ -26,6 +26,12 @@ create table if not exists public.fleet_checklists (
 alter table public.fleet_vehicles enable row level security;
 alter table public.fleet_checklists enable row level security;
 
+grant usage on schema public to anon, authenticated;
+grant select on public.fleet_vehicles to anon, authenticated;
+grant select on public.fleet_checklists to anon, authenticated;
+grant insert, update, delete on public.fleet_vehicles to authenticated;
+grant insert on public.fleet_checklists to authenticated;
+
 drop policy if exists "Fleet vehicles are readable" on public.fleet_vehicles;
 create policy "Fleet vehicles are readable"
   on public.fleet_vehicles for select
