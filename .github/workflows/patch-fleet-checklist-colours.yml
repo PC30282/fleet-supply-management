@@ -1,0 +1,70 @@
+name: Patch Fleet Status checklist colours
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/patch-fleet-checklist-colours.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: site
+
+      - name: Add checklist colour status
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('site/fleet-status.html')
+          text = path.read_text(encoding='utf-8')
+
+          css_anchor = '.fact strong{display:block;font-size:.98rem;overflow-wrap:anywhere}'
+          css_add = '.fact.checklist-ok{border-color:#9bd7b4;background:var(--green2)}.fact.checklist-due{border-color:#f0cf80;background:var(--amber2)}.fact.checklist-overdue{border-color:#ffc8c0;background:var(--red2)}.checklist-flag{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;padding:5px 8px;font-weight:900;font-size:.72rem;white-space:nowrap}.checklist-flag.ok{background:var(--green2);color:var(--green)}.checklist-flag.due{background:var(--amber2);color:var(--amber)}.checklist-flag.overdue{background:var(--red2);color:var(--red)}'
+          if css_add not in text:
+              text = text.replace(css_anchor, css_anchor + css_add, 1)
+
+          func_anchor = 'function vehicleRequests(v){const vrm=normaliseVrm(v?.vrm);return requests.filter(r=>normaliseVrm(r.vehicle)===vrm&&r.status!=="Cancelled")}function latestChecklist(v){return checklists.find(c=>c.vehicle_id===v?.id)||checklists.find(c=>normaliseVrm(c.vehicle_vrm)===normaliseVrm(v?.vrm))||null}\n'
+          func_add = 'function checklistState(v){const check=latestChecklist(v),time=check?.completed_at?new Date(check.completed_at).getTime():0,days=time?(Date.now()-time)/86400000:Infinity;if(days>10)return{className:"checklist-overdue",badgeClass:"overdue",label:"Checklist overdue"};if(days>3)return{className:"checklist-due",badgeClass:"due",label:"Checklist due"};return{className:"checklist-ok",badgeClass:"ok",label:"Checklist current"}}function checklistBadge(v){const state=checklistState(v);return `<span class="checklist-flag ${state.badgeClass}">${escapeHtml(state.label)}</span>`}\n'
+          if 'function checklistState(v)' not in text:
+              text = text.replace(func_anchor, func_anchor + func_add, 1)
+
+          old_list = '<span class="pill ${statusClass(v.status)}">${escapeHtml(v.status)}</span></div><div class="vehicle-meta"><span>${escapeHtml(v.make)} ${escapeHtml(v.model)}</span><span>${escapeHtml(v.vehicle_type)}</span></div></button>`).join("")||`<div class="empty">No fleet vehicles found.</div>`}'
+          new_list = '<span class="pill ${statusClass(v.status)}">${escapeHtml(v.status)}</span></div><div class="vehicle-meta"><span>${escapeHtml(v.make)} ${escapeHtml(v.model)}</span><span>${escapeHtml(v.vehicle_type)}</span>${checklistBadge(v)}</div></button>`).join("")||`<div class="empty">No fleet vehicles found.</div>`}'
+          if '${checklistBadge(v)}' not in text:
+              text = text.replace(old_list, new_list, 1)
+
+          old_detail = 'const reqs=vehicleRequests(v),check=latestChecklist(v);vehicleDetail.innerHTML=`<div class="detail-head">'
+          new_detail = 'const reqs=vehicleRequests(v),check=latestChecklist(v),checkState=checklistState(v);vehicleDetail.innerHTML=`<div class="detail-head">'
+          if 'checkState=checklistState(v)' not in text:
+              text = text.replace(old_detail, new_detail, 1)
+
+          old_fact = '<div class="fact"><span>Last checklist</span><strong>${escapeHtml(formatDate(check?.completed_at))}</strong>${check?.completed_by?`<small>By ${escapeHtml(check.completed_by)}</small>`:""}</div><div class="fact"><span>Last status update</span>'
+          new_fact = '<div class="fact ${checkState.className}"><span>Last checklist</span><strong>${escapeHtml(formatDate(check?.completed_at))}</strong><small>${escapeHtml(checkState.label)}</small>${check?.completed_by?`<small>By ${escapeHtml(check.completed_by)}</small>`:""}</div><div class="fact"><span>Last status update</span>'
+          if '${checkState.className}' not in text:
+              text = text.replace(old_fact, new_fact, 1)
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Commit and push gh-pages change
+        run: |
+          cd site
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "No changes to commit"
+          else
+            git add fleet-status.html
+            git commit -m "Add checklist due colours to Fleet Status"
+            git push origin gh-pages
+          fi
