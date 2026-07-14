@@ -23,8 +23,15 @@ create table if not exists public.fleet_checklists (
   notes text
 );
 
+create table if not exists public.supervisor_profiles (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  collar_number text not null,
+  updated_at timestamptz not null default now()
+);
+
 alter table public.fleet_vehicles enable row level security;
 alter table public.fleet_checklists enable row level security;
+alter table public.supervisor_profiles enable row level security;
 
 grant usage on schema public to anon, authenticated;
 grant select on public.fleet_vehicles to anon, authenticated;
@@ -32,6 +39,7 @@ grant select on public.fleet_checklists to anon, authenticated;
 grant insert, update, delete on public.fleet_vehicles to authenticated;
 grant insert on public.fleet_checklists to anon, authenticated;
 grant delete on public.fleet_checklists to authenticated;
+grant select, insert, update on public.supervisor_profiles to authenticated;
 
 drop policy if exists "Fleet vehicles are readable" on public.fleet_vehicles;
 create policy "Fleet vehicles are readable"
@@ -64,6 +72,25 @@ create policy "Supervisors can delete fleet checklists"
   on public.fleet_checklists for delete
   to authenticated
   using (true);
+
+drop policy if exists "Users can read their own supervisor profile" on public.supervisor_profiles;
+create policy "Users can read their own supervisor profile"
+  on public.supervisor_profiles for select
+  to authenticated
+  using (auth.uid() = user_id);
+
+drop policy if exists "Users can create their own supervisor profile" on public.supervisor_profiles;
+create policy "Users can create their own supervisor profile"
+  on public.supervisor_profiles for insert
+  to authenticated
+  with check (auth.uid() = user_id);
+
+drop policy if exists "Users can update their own supervisor profile" on public.supervisor_profiles;
+create policy "Users can update their own supervisor profile"
+  on public.supervisor_profiles for update
+  to authenticated
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
 
 create index if not exists fleet_vehicles_sort_idx on public.fleet_vehicles(sort_order, vrm);
 create index if not exists fleet_checklists_vehicle_idx on public.fleet_checklists(vehicle_id, completed_at desc);
