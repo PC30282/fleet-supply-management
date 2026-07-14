@@ -1,0 +1,61 @@
+name: Save supervisor collar
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout site branch
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: site
+
+      - name: Patch Fleet Status supervisor collar handling
+        run: |
+          cat > /tmp/patch_collar.py <<'PY'
+          from pathlib import Path
+
+          path = Path('site/fleet-status.html')
+          text = path.read_text(encoding='utf-8')
+
+          old_state = 'let vehicles=[],requests=[],checklists=[],selectedId=null,adminUnlocked=false,supervisorUser=null,draftVehicles=[],draftDirty=false,tablesReady=true;'
+          new_state = 'let vehicles=[],requests=[],checklists=[],selectedId=null,adminUnlocked=false,supervisorUser=null,supervisorCollar="",draftVehicles=[],draftDirty=false,tablesReady=true;'
+          if old_state in text:
+              text = text.replace(old_state, new_state, 1)
+
+          old_set = 'function render(){document.body.classList.toggle("admin-on",adminUnlocked);renderMetrics();renderFleetList();renderDetail();renderManager()}function setSupervisor(user){supervisorUser=user||null;adminUnlocked=Boolean(user);accessState.classList.toggle("on",adminUnlocked);accessState.classList.toggle("neutral",!adminUnlocked);if(adminUnlocked){accessState.textContent=`Supervisor: ${supervisorName()}`;adminButton.innerHTML=unlockIcon;adminButton.title="Sign out"}else{accessState.textContent="View only";adminButton.innerHTML=lockIcon;adminButton.title="Supervisor login"}render()}'
+          new_set = 'function render(){document.body.classList.toggle("admin-on",adminUnlocked);renderMetrics();renderFleetList();renderDetail();renderManager()}async function loadSupervisorProfile(){supervisorCollar="";if(!supervisorUser)return;try{const {data,error}=await db.from("supervisor_profiles").select("collar_number").eq("user_id",supervisorUser.id).maybeSingle();if(error)throw error;supervisorCollar=data?.collar_number||""}catch(error){console.error("Loading supervisor profile",error)}}async function saveSupervisorCollar(collar){if(!supervisorUser)return;await check(await db.from("supervisor_profiles").upsert({user_id:supervisorUser.id,collar_number:collar,updated_at:new Date().toISOString()}),"Saving supervisor collar");supervisorCollar=collar}async function setSupervisor(user){supervisorUser=user||null;adminUnlocked=Boolean(user);if(!adminUnlocked)supervisorCollar="";accessState.classList.toggle("on",adminUnlocked);accessState.classList.toggle("neutral",!adminUnlocked);if(adminUnlocked){accessState.textContent=`Supervisor: ${supervisorName()}`;adminButton.innerHTML=unlockIcon;adminButton.title="Sign out";await loadSupervisorProfile()}else{accessState.textContent="View only";adminButton.innerHTML=lockIcon;adminButton.title="Supervisor login"}render()}'
+          if old_set in text:
+              text = text.replace(old_set, new_set, 1)
+          elif 'async function loadSupervisorProfile' not in text:
+              raise SystemExit('Could not patch setSupervisor block')
+
+          old_update = 'async function updateVehicleStatus(id,status){const v=vehicles.find(x=>x.id===id);if(!v)return;const previous=v.status;const collar=prompt(`Enter your collar number to mark ${formatVrm(v.vrm)} as ${status}:`);if(!collar||!collar.trim()){render();return}const clean=collar.trim().replace(/[^0-9A-Za-z]/g,"");if(!clean){render();showToast("Collar number is required.");return}try{showToast("Saving vehicle status...");await check(await db.rpc("update_fleet_vehicle_status",{vehicle_id:id,new_status:status,collar_number:clean}),"Updating status");await loadData();showToast("Vehicle status updated.")}catch(error){console.error(error);const message=String(error?.message||"");if(message.includes("update_fleet_vehicle_status")||message.includes("function")||message.includes("schema cache")){showToast("Database update needed: run the latest fleet-status-schema.sql in Supabase.")}else{showToast("Status could not be saved. Please try again.")}v.status=previous;render()}}'
+          new_update = 'async function updateVehicleStatus(id,status){const v=vehicles.find(x=>x.id===id);if(!v)return;const previous=v.status;let clean=supervisorUser&&supervisorCollar?supervisorCollar:"";if(!clean){const promptText=supervisorUser?`Enter your collar number. It will be saved to your login for future status changes:`:`Enter your collar number to mark ${formatVrm(v.vrm)} as ${status}:`;const collar=prompt(promptText);if(!collar||!collar.trim()){render();return}clean=collar.trim().replace(/[^0-9A-Za-z]/g,"");if(!clean){render();showToast("Collar number is required.");return}if(supervisorUser){try{await saveSupervisorCollar(clean);showToast("Collar number saved to your login.")}catch(error){console.error(error);showToast("Collar could not be saved, but the status update will still be tried.")}}}try{showToast("Saving vehicle status...");await check(await db.rpc("update_fleet_vehicle_status",{vehicle_id:id,new_status:status,collar_number:clean}),"Updating status");await loadData();showToast("Vehicle status updated.")}catch(error){console.error(error);const message=String(error?.message||"");if(message.includes("supervisor_profiles")){showToast("Database update needed: run the latest fleet-status-schema.sql in Supabase.")}else if(message.includes("update_fleet_vehicle_status")||message.includes("function")||message.includes("schema cache")){showToast("Database update needed: run the latest fleet-status-schema.sql in Supabase.")}else{showToast("Status could not be saved. Please try again.")}v.status=previous;render()}}'
+          if old_update in text:
+              text = text.replace(old_update, new_update, 1)
+          elif 'let clean=supervisorUser&&supervisorCollar' not in text:
+              raise SystemExit('Could not patch updateVehicleStatus')
+
+          path.write_text(text, encoding='utf-8')
+          Path('site/.pages-refresh').write_text('Refreshed GitHub Pages deployment after supervisor collar storage update.\n', encoding='utf-8')
+          PY
+          python /tmp/patch_collar.py
+
+      - name: Commit patched site
+        run: |
+          cd site
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add fleet-status.html .pages-refresh
+          git diff --cached --quiet && exit 0
+          git commit -m "Remember supervisor collar number"
+          git push origin gh-pages
