@@ -67,3 +67,36 @@ create policy "Supervisors can delete fleet checklists"
 
 create index if not exists fleet_vehicles_sort_idx on public.fleet_vehicles(sort_order, vrm);
 create index if not exists fleet_checklists_vehicle_idx on public.fleet_checklists(vehicle_id, completed_at desc);
+
+create or replace function public.update_fleet_vehicle_status(
+  vehicle_id uuid,
+  new_status text,
+  collar_number text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new_status not in ('On-Road', 'Reported', 'Off-Road') then
+    raise exception 'Invalid vehicle status';
+  end if;
+
+  if nullif(trim(collar_number), '') is null then
+    raise exception 'Collar number is required';
+  end if;
+
+  update public.fleet_vehicles
+  set status = new_status,
+      status_updated_at = now(),
+      status_updated_by = 'Collar ' || trim(collar_number)
+  where id = vehicle_id;
+
+  if not found then
+    raise exception 'Vehicle not found';
+  end if;
+end;
+$$;
+
+grant execute on function public.update_fleet_vehicle_status(uuid, text, text) to anon, authenticated;
