@@ -31,6 +31,7 @@ grant select on public.fleet_vehicles to anon, authenticated;
 grant select on public.fleet_checklists to anon, authenticated;
 grant insert, update, delete on public.fleet_vehicles to authenticated;
 grant insert on public.fleet_checklists to anon, authenticated;
+grant delete on public.fleet_checklists to authenticated;
 
 drop policy if exists "Fleet vehicles are readable" on public.fleet_vehicles;
 create policy "Fleet vehicles are readable"
@@ -57,6 +58,12 @@ create policy "Public users can record fleet checklists"
   on public.fleet_checklists for insert
   to anon, authenticated
   with check (true);
+
+drop policy if exists "Supervisors can delete fleet checklists" on public.fleet_checklists;
+create policy "Supervisors can delete fleet checklists"
+  on public.fleet_checklists for delete
+  to authenticated
+  using (true);
 
 create index if not exists fleet_vehicles_sort_idx on public.fleet_vehicles(sort_order, vrm);
 create index if not exists fleet_checklists_vehicle_idx on public.fleet_checklists(vehicle_id, completed_at desc);
