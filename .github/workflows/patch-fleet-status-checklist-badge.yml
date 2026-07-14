@@ -33,7 +33,7 @@ jobs:
               raise SystemExit('Could not find checklistBadge function')
           if old in text:
               text = text.replace(old, new, 1)
-          Path('site/.pages-refresh').write_text('Refreshed GitHub Pages deployment on 2026-07-14 after fleet status checklist badge display update.\n', encoding='utf-8')
+          Path('site/.pages-refresh').write_text('Refreshed GitHub Pages deployment on 2026-07-14 after hiding checklist badges for reported and off-road vehicles.\n', encoding='utf-8')
           path.write_text(text, encoding='utf-8')
           PY
 
