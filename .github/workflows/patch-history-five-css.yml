@@ -1,0 +1,44 @@
+name: Patch checklist history visible limit
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/patch-history-five-css.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: site
+
+      - name: Limit checklist history to five visible records
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('site/fleet-status.html')
+          text = path.read_text(encoding='utf-8')
+          rule = '.history-list .history-card:nth-of-type(n+6){display:none}'
+          if rule not in text:
+              text = text.replace('.history-card .danger-button{display:none;min-height:38px}', rule + '.history-card .danger-button{display:none;min-height:38px}', 1)
+              path.write_text(text, encoding='utf-8')
+          Path('site/.pages-refresh').write_text('Refreshed GitHub Pages deployment on 2026-07-14 after checklist history visible limit.\n', encoding='utf-8')
+          PY
+
+      - name: Commit and push gh-pages change
+        run: |
+          cd site
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add fleet-status.html .pages-refresh
+          git commit -m "Limit visible checklist history to five records"
+          git push origin gh-pages
