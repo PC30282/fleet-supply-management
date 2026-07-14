@@ -1,0 +1,74 @@
+name: Patch checklist completion recording
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/patch-checklist-completion.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: site
+
+      - name: Allow empty checklists to update Fleet Status
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          index = Path('site/index.html')
+          text = index.read_text(encoding='utf-8')
+          original = text
+
+          def replace_once(old, new, label):
+              global text
+              if old not in text:
+                  raise SystemExit(f'Missing expected text for {label}')
+              text = text.replace(old, new, 1)
+
+          if 'async function recordFleetChecklist(' not in text:
+              anchor = 'async function createRequest(payload){return await checkError(await db.from("requests").insert(payload).select("id,section,item,vehicle,quantity,requester,notes,status,created_at").single(),"Saving request")}\n'
+              helper = 'async function recordFleetChecklist(vrm,requester,notes){const match=fleetVehicles.find(item=>normaliseVrm(item)===normaliseVrm(vrm));const row={vehicle_vrm:formatVrm(vrm),completed_by:requester,notes:notes||""};if(match)row.vehicle_vrm=match;await checkError(await db.from("fleet_checklists").insert(row),"Recording checklist")}\n'
+              replace_once(anchor, anchor + helper, 'record checklist helper')
+
+          old_no_missing = 'if(!missing.length){showToast("No missing quantities found.");return}'
+          new_no_missing = 'await recordFleetChecklist(vrm,requester,checklistNotes.value.trim());if(!missing.length){checklistForm.reset();renderChecklist();await refreshAll(true);showToast("Checklist completed. No supply requests needed.");return}'
+          if 'Checklist completed. No supply requests needed.' not in text:
+              replace_once(old_no_missing, new_no_missing, 'no missing checklist completion')
+
+          old_success = 'showToast(`${created} request${created===1?"":"s"} generated${skipped?`, ${skipped} skipped as recent duplicate${skipped===1?"":"s"}`:""}.`)});'
+          new_success = 'showToast(`${created} request${created===1?"":"s"} generated${skipped?`, ${skipped} skipped as recent duplicate${skipped===1?"":"s"}`:""}. Checklist completed.`)});'
+          if 'Checklist completed.`)});' not in text:
+              replace_once(old_success, new_success, 'checklist success message')
+
+          if text == original:
+              raise SystemExit('No index changes made')
+          index.write_text(text, encoding='utf-8')
+
+          schema = Path('site/fleet-status-schema.sql')
+          sql = schema.read_text(encoding='utf-8')
+          original_sql = sql
+          sql = sql.replace('grant insert on public.fleet_checklists to authenticated;', 'grant insert on public.fleet_checklists to anon, authenticated;')
+          if 'Public users can record fleet checklists' not in sql:
+              sql = sql.replace('drop policy if exists "Supervisors can record fleet checklists" on public.fleet_checklists;\ncreate policy "Supervisors can record fleet checklists"\n  on public.fleet_checklists for insert\n  to authenticated\n  with check (true);', 'drop policy if exists "Supervisors can record fleet checklists" on public.fleet_checklists;\ndrop policy if exists "Public users can record fleet checklists" on public.fleet_checklists;\ncreate policy "Public users can record fleet checklists"\n  on public.fleet_checklists for insert\n  to anon, authenticated\n  with check (true);')
+          if sql != original_sql:
+              schema.write_text(sql, encoding='utf-8')
+          PY
+
+      - name: Commit and push gh-pages change
+        run: |
+          cd site
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html fleet-status-schema.sql
+          git commit -m "Allow completed vehicle checklists without supply requests"
+          git push origin gh-pages
