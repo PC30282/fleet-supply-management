@@ -1,0 +1,124 @@
+name: Status dropdown simple patch
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout site branch
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: site
+
+      - name: Patch fleet status page
+        run: |
+          cat > /tmp/patch_status.py <<'PY'
+          from pathlib import Path
+
+          page = Path('site/fleet-status.html')
+          text = page.read_text(encoding='utf-8')
+
+          marker = '.pill.neutral{background:#eef1f4;color:var(--muted)}'
+          css = '.status-select{width:auto;min-height:38px;border-radius:999px;padding:7px 32px 7px 12px;font-weight:900;font-size:.78rem;border:0}.status-select.on{background:var(--green2);color:var(--green)}.status-select.reported{background:var(--amber2);color:var(--amber)}.status-select.off{background:var(--red2);color:var(--red)}'
+          if css not in text:
+              text = text.replace(marker, marker + css, 1)
+
+          helper = 'function vehicleStatusOptions(status){return ["On-Road","Reported","Off-Road"].map(option=>`<option value="${option}" ${option===status?"selected":""}>${option}</option>`).join("")}'
+          if helper not in text:
+              insert_after = 'function requestStatusOptions(status){return ["Pending","Ordered","Delivered","Cancelled"].map(option=>`<option value="${option}" ${option===status?"selected":""}>${option}</option>`).join("")}'
+              text = text.replace(insert_after, insert_after + helper, 1)
+
+          old_pill = '<span class="pill ${statusClass(v.status)}">${escapeHtml(v.status)}</span>'
+          dropdown = '<select class="status-select ${statusClass(v.status)}" data-vehicle-status="${escapeHtml(v.id)}" aria-label="Vehicle status">${vehicleStatusOptions(v.status)}</select>'
+          if 'data-vehicle-status' not in text:
+              start = text.index('function renderDetail()')
+              pos = text.index(old_pill, start)
+              text = text[:pos] + dropdown + text[pos + len(old_pill):]
+
+          start_marker = '<section class="admin-panel"><div class="section-title"><h3>Supervisor actions</h3>'
+          if start_marker in text:
+              start = text.index(start_marker)
+              end = text.index('</section>`}', start)
+              text = text[:start] + '`}' + text[end + len('</section>`}'):]
+
+          old_update_start = 'async function updateStatus(id){'
+          if 'async function updateVehicleStatus' not in text:
+              start = text.index(old_update_start)
+              end = text.index('async function recordChecklist', start)
+              replacement = 'async function updateVehicleStatus(id,status){const v=vehicles.find(x=>x.id===id);if(!v)return;const collar=prompt(`Enter your collar number to mark ${formatVrm(v.vrm)} as ${status}:`);if(!collar||!collar.trim()){render();return}const clean=collar.trim().replace(/[^0-9A-Za-z]/g,"");if(!clean){render();showToast("Collar number is required.");return}await check(await db.rpc("update_fleet_vehicle_status",{vehicle_id:id,new_status:status,collar_number:clean}),"Updating status");await loadData();showToast("Vehicle status updated.")}'
+              text = text[:start] + replacement + text[end:]
+
+          old_click_start = 'vehicleDetail.addEventListener("click",e=>{'
+          if 'data-update-status' in text or 'data-record-checklist' in text:
+              start = text.index(old_click_start)
+              end = text.index('vehicleDetail.addEventListener("change"', start)
+              replacement = 'vehicleDetail.addEventListener("click",e=>{const deleteCheck=e.target.closest("[data-delete-checklist]"),deleteReq=e.target.closest("[data-delete-request]");if(deleteCheck)deleteChecklist(deleteCheck.dataset.deleteChecklist);if(deleteReq)deleteRequest(deleteReq.dataset.deleteRequest)});'
+              text = text[:start] + replacement + text[end:]
+
+          old_change = 'vehicleDetail.addEventListener("change",e=>{const requestStatus=e.target.closest("[data-request-status]");if(requestStatus)updateRequestStatus(requestStatus.dataset.requestStatus,requestStatus.value)});'
+          new_change = 'vehicleDetail.addEventListener("change",e=>{const vehicleStatus=e.target.closest("[data-vehicle-status]"),requestStatus=e.target.closest("[data-request-status]");if(vehicleStatus){updateVehicleStatus(vehicleStatus.dataset.vehicleStatus,vehicleStatus.value);return}if(requestStatus)updateRequestStatus(requestStatus.dataset.requestStatus,requestStatus.value)});'
+          text = text.replace(old_change, new_change, 1)
+
+          page.write_text(text, encoding='utf-8')
+
+          schema = Path('site/fleet-status-schema.sql')
+          sql = schema.read_text(encoding='utf-8')
+          if 'update_fleet_vehicle_status' not in sql:
+              sql += '''
+
+create or replace function public.update_fleet_vehicle_status(
+  vehicle_id uuid,
+  new_status text,
+  collar_number text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new_status not in ('On-Road', 'Reported', 'Off-Road') then
+    raise exception 'Invalid vehicle status';
+  end if;
+
+  if nullif(trim(collar_number), '') is null then
+    raise exception 'Collar number is required';
+  end if;
+
+  update public.fleet_vehicles
+  set status = new_status,
+      status_updated_at = now(),
+      status_updated_by = 'Collar ' || trim(collar_number)
+  where id = vehicle_id;
+
+  if not found then
+    raise exception 'Vehicle not found';
+  end if;
+end;
+$$;
+
+grant execute on function public.update_fleet_vehicle_status(uuid, text, text) to anon, authenticated;
+'''
+              schema.write_text(sql, encoding='utf-8')
+
+          Path('site/.pages-refresh').write_text('Refreshed GitHub Pages deployment after public status dropdown update.\n', encoding='utf-8')
+          PY
+          python /tmp/patch_status.py
+
+      - name: Commit patched site
+        run: |
+          cd site
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add fleet-status.html fleet-status-schema.sql .pages-refresh
+          git diff --cached --quiet && exit 0
+          git commit -m "Add public fleet status dropdown"
+          git push origin gh-pages
