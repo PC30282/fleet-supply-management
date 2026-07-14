@@ -27,17 +27,15 @@ jobs:
           from pathlib import Path
           page = Path('site/fleet-status.html')
           text = page.read_text(encoding='utf-8')
-          original = text
           if 'shownHistory=history.slice(0,5)' not in text:
-              text = text.replace('const reqs=vehicleRequests(v),history=vehicleChecklists(v),check=history[0]||null,checkState=checklistState(v);vehicleDetail.innerHTML=`', 'const reqs=vehicleRequests(v),history=vehicleChecklists(v),shownHistory=history.slice(0,5),check=history[0]||null,checkState=checklistState(v);vehicleDetail.innerHTML=`', 1)
-              text = text.replace('<div class="section-title"><h3>Checklist history</h3><small>${history.length} shown</small></div><div class="history-list">${history.map(c=>`', '<div class="section-title"><h3>Checklist history</h3><small>${Math.min(history.length,5)} of ${history.length} shown</small></div><div class="history-list">${shownHistory.map(c=>`', 1)
-          if text != original:
+              text = text.replace('const reqs=vehicleRequests(v),history=vehicleChecklists(v),check=history[0]||null,checkState=checklistState(v);', 'const reqs=vehicleRequests(v),history=vehicleChecklists(v),shownHistory=history.slice(0,5),check=history[0]||null,checkState=checklistState(v);', 1)
+              text = text.replace('<small>${history.length} shown</small></div><div class="history-list">${history.map(c=>`', '<small>${Math.min(history.length,5)} of ${history.length} shown</small></div><div class="history-list">${shownHistory.map(c=>`', 1)
               page.write_text(text, encoding='utf-8')
 
           cleanup_sql = """-- Automatic cleanup for Fleet Supply Management
 -- Run this in Supabase SQL Editor.
--- It tracks when requests become Delivered, then removes Delivered requests after 30 days.
--- It also removes checklist records older than 30 days when a newer checklist exists for the same vehicle.
+-- This tracks when requests become Delivered, removes Delivered requests after 30 days,
+-- and removes old checklist records after 30 days when a newer checklist exists.
 
 alter table public.requests
   add column if not exists delivered_at timestamptz;
@@ -86,16 +84,7 @@ begin
       where newer_check.completed_at > old_check.completed_at
         and (
           (old_check.vehicle_id is not null and newer_check.vehicle_id = old_check.vehicle_id)
-          or (
-            old_check.vehicle_id is null
-            and newer_check.vehicle_id is null
-            and lower(replace(newer_check.vehicle_vrm, ' ', '')) = lower(replace(old_check.vehicle_vrm, ' ', ''))
-          )
-          or (
-            old_check.vehicle_id is null
-            and newer_check.vehicle_id is not null
-            and lower(replace(newer_check.vehicle_vrm, ' ', '')) = lower(replace(old_check.vehicle_vrm, ' ', ''))
-          )
+          or lower(replace(newer_check.vehicle_vrm, ' ', '')) = lower(replace(old_check.vehicle_vrm, ' ', ''))
         )
     );
 end;
