@@ -49,16 +49,14 @@ jobs:
               end = text.index('</section>`}', start)
               text = text[:start] + '`}' + text[end + len('</section>`}'):]
 
-          old_update_start = 'async function updateStatus(id){'
           if 'async function updateVehicleStatus' not in text:
-              start = text.index(old_update_start)
+              start = text.index('async function updateStatus(id){')
               end = text.index('async function recordChecklist', start)
               replacement = 'async function updateVehicleStatus(id,status){const v=vehicles.find(x=>x.id===id);if(!v)return;const collar=prompt(`Enter your collar number to mark ${formatVrm(v.vrm)} as ${status}:`);if(!collar||!collar.trim()){render();return}const clean=collar.trim().replace(/[^0-9A-Za-z]/g,"");if(!clean){render();showToast("Collar number is required.");return}await check(await db.rpc("update_fleet_vehicle_status",{vehicle_id:id,new_status:status,collar_number:clean}),"Updating status");await loadData();showToast("Vehicle status updated.")}'
               text = text[:start] + replacement + text[end:]
 
-          old_click_start = 'vehicleDetail.addEventListener("click",e=>{'
           if 'data-update-status' in text or 'data-record-checklist' in text:
-              start = text.index(old_click_start)
+              start = text.index('vehicleDetail.addEventListener("click",e=>{')
               end = text.index('vehicleDetail.addEventListener("change"', start)
               replacement = 'vehicleDetail.addEventListener("click",e=>{const deleteCheck=e.target.closest("[data-delete-checklist]"),deleteReq=e.target.closest("[data-delete-request]");if(deleteCheck)deleteChecklist(deleteCheck.dataset.deleteChecklist);if(deleteReq)deleteRequest(deleteReq.dataset.deleteRequest)});'
               text = text[:start] + replacement + text[end:]
@@ -67,49 +65,8 @@ jobs:
           new_change = 'vehicleDetail.addEventListener("change",e=>{const vehicleStatus=e.target.closest("[data-vehicle-status]"),requestStatus=e.target.closest("[data-request-status]");if(vehicleStatus){updateVehicleStatus(vehicleStatus.dataset.vehicleStatus,vehicleStatus.value);return}if(requestStatus)updateRequestStatus(requestStatus.dataset.requestStatus,requestStatus.value)});'
           text = text.replace(old_change, new_change, 1)
 
-          page.write_text(text, encoding='utf-8')
-
-          schema = Path('site/fleet-status-schema.sql')
-          sql = schema.read_text(encoding='utf-8')
-          if 'update_fleet_vehicle_status' not in sql:
-              sql += '''
-
-create or replace function public.update_fleet_vehicle_status(
-  vehicle_id uuid,
-  new_status text,
-  collar_number text
-)
-returns void
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  if new_status not in ('On-Road', 'Reported', 'Off-Road') then
-    raise exception 'Invalid vehicle status';
-  end if;
-
-  if nullif(trim(collar_number), '') is null then
-    raise exception 'Collar number is required';
-  end if;
-
-  update public.fleet_vehicles
-  set status = new_status,
-      status_updated_at = now(),
-      status_updated_by = 'Collar ' || trim(collar_number)
-  where id = vehicle_id;
-
-  if not found then
-    raise exception 'Vehicle not found';
-  end if;
-end;
-$$;
-
-grant execute on function public.update_fleet_vehicle_status(uuid, text, text) to anon, authenticated;
-'''
-              schema.write_text(sql, encoding='utf-8')
-
           Path('site/.pages-refresh').write_text('Refreshed GitHub Pages deployment after public status dropdown update.\n', encoding='utf-8')
+          page.write_text(text, encoding='utf-8')
           PY
           python /tmp/patch_status.py
 
@@ -118,7 +75,7 @@ grant execute on function public.update_fleet_vehicle_status(uuid, text, text) t
           cd site
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add fleet-status.html fleet-status-schema.sql .pages-refresh
+          git add fleet-status.html .pages-refresh
           git diff --cached --quiet && exit 0
           git commit -m "Add public fleet status dropdown"
           git push origin gh-pages
