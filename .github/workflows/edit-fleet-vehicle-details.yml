@@ -1,0 +1,66 @@
+name: Edit fleet vehicle details
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout site branch
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: site
+
+      - name: Patch Fleet Status vehicle details editor
+        run: |
+          cat > /tmp/patch_vehicle_editor.py <<'PY'
+          from pathlib import Path
+
+          path = Path('site/fleet-status.html')
+          text = path.read_text(encoding='utf-8')
+
+          marker_css = '.detail-title .status-select.off{background-color:var(--red2);color:var(--red)}'
+          editor_css = '.vehicle-edit-panel{display:none;margin-top:16px;padding-top:16px;border-top:1px solid var(--line)}body.admin-on .vehicle-edit-panel{display:block}.vehicle-edit-panel .form-actions{align-items:end}.vehicle-edit-note{margin:0;color:var(--muted);font-weight:800;font-size:.84rem}'
+          if editor_css not in text:
+              text = text.replace(marker_css, marker_css + editor_css, 1)
+
+          old_detail_end = '${reqs.map(r=>`<article class="request-card" data-status="${escapeHtml(r.status)}"><h4>${escapeHtml(r.item)}</h4><p>Qty ${escapeHtml(r.quantity)} - ${escapeHtml(r.status)} - Collar ${escapeHtml(r.requester)} - ${escapeHtml(formatDate(r.created_at))}</p>${r.notes?`<p>${escapeHtml(r.notes)}</p>`:""}<div class="request-manage"><select data-request-status="${escapeHtml(r.id)}">${requestStatusOptions(r.status)}</select><button class="danger-button" data-delete-request="${escapeHtml(r.id)}" type="button">Delete</button></div></article>`).join("")||`<div class="empty">No requests recorded for this vehicle.</div>`}</div>`}'
+          new_detail_end = '${reqs.map(r=>`<article class="request-card" data-status="${escapeHtml(r.status)}"><h4>${escapeHtml(r.item)}</h4><p>Qty ${escapeHtml(r.quantity)} - ${escapeHtml(r.status)} - Collar ${escapeHtml(r.requester)} - ${escapeHtml(formatDate(r.created_at))}</p>${r.notes?`<p>${escapeHtml(r.notes)}</p>`:""}<div class="request-manage"><select data-request-status="${escapeHtml(r.id)}">${requestStatusOptions(r.status)}</select><button class="danger-button" data-delete-request="${escapeHtml(r.id)}" type="button">Delete</button></div></article>`).join("")||`<div class="empty">No requests recorded for this vehicle.</div>`}</div><section class="vehicle-edit-panel"><div class="section-title"><h3>Edit vehicle details</h3><small>Supervisor</small></div><div class="form-grid"><div class="field"><label for="editVehicleVrm">VRM</label><input id="editVehicleVrm" value="${escapeHtml(formatVrm(v.vrm))}" autocomplete="off"></div><div class="field"><label for="editVehicleType">Vehicle type</label><select id="editVehicleType"><option ${v.vehicle_type==="Marked"?"selected":""}>Marked</option><option ${v.vehicle_type==="Unmarked"?"selected":""}>Unmarked</option></select></div></div><div class="form-grid"><div class="field"><label for="editVehicleMake">Make</label><input id="editVehicleMake" value="${escapeHtml(v.make)}" autocomplete="off"></div><div class="field"><label for="editVehicleModel">Model</label><input id="editVehicleModel" value="${escapeHtml(v.model)}" autocomplete="off"></div></div><div class="form-actions"><p class="vehicle-edit-note">Changes are only saved when you press Save.</p><button class="primary-button" data-save-vehicle-details="${escapeHtml(v.id)}" type="button">Save vehicle details</button></div></section>`}'
+          if old_detail_end in text:
+              text = text.replace(old_detail_end, new_detail_end, 1)
+          elif 'data-save-vehicle-details' not in text:
+              raise SystemExit('Could not add vehicle edit panel')
+
+          insert_after = 'async function saveOrder(){if(!adminUnlocked)return;const active=draftVehicles.filter(v=>!v.delete);for(const v of draftVehicles.filter(v=>v.delete))await check(await db.from("fleet_vehicles").delete().eq("id",v.id),"Removing vehicle");for(let i=0;i<active.length;i++)await check(await db.from("fleet_vehicles").update({sort_order:i}).eq("id",active[i].id),"Saving order");draftDirty=false;await loadData();showToast("Fleet order saved.")}'
+          save_fn = 'async function saveVehicleDetails(id){if(!adminUnlocked){showToast("Supervisor login required.");return}const v=vehicles.find(x=>x.id===id);if(!v)return;const oldVrm=formatVrm(v.vrm),newVrm=formatVrm($("#editVehicleVrm")?.value||"");if(!newVrm){showToast("VRM is required.");return}const row={vrm:newVrm,make:$("#editVehicleMake")?.value.trim()||"",model:$("#editVehicleModel")?.value.trim()||"",vehicle_type:$("#editVehicleType")?.value||"Marked"};try{showToast("Saving vehicle details...");await check(await db.from("fleet_vehicles").update(row).eq("id",id),"Saving vehicle details");const matching=requests.filter(r=>normaliseVrm(r.vehicle)===normaliseVrm(oldVrm));for(const request of matching)await check(await db.from("requests").update({vehicle:newVrm}).eq("id",request.id),"Updating vehicle requests");await check(await db.from("fleet_checklists").update({vehicle_vrm:newVrm}).eq("vehicle_id",id),"Updating vehicle checklists");await loadData();showToast("Vehicle details saved.")}catch(error){console.error(error);const message=String(error?.message||"");if(message.includes("duplicate")||message.includes("unique")){showToast("That VRM already exists in the fleet list.")}else{showToast("Vehicle details could not be saved.")}}}'
+          if save_fn not in text:
+              text = text.replace(insert_after, insert_after + save_fn, 1)
+
+          old_click = 'vehicleDetail.addEventListener("click",e=>{const deleteCheck=e.target.closest("[data-delete-checklist]"),deleteReq=e.target.closest("[data-delete-request]");if(deleteCheck)deleteChecklist(deleteCheck.dataset.deleteChecklist);if(deleteReq)deleteRequest(deleteReq.dataset.deleteRequest)});'
+          new_click = 'vehicleDetail.addEventListener("click",e=>{const saveDetails=e.target.closest("[data-save-vehicle-details]"),deleteCheck=e.target.closest("[data-delete-checklist]"),deleteReq=e.target.closest("[data-delete-request]");if(saveDetails)saveVehicleDetails(saveDetails.dataset.saveVehicleDetails);if(deleteCheck)deleteChecklist(deleteCheck.dataset.deleteChecklist);if(deleteReq)deleteRequest(deleteReq.dataset.deleteRequest)});'
+          if old_click in text:
+              text = text.replace(old_click, new_click, 1)
+          elif 'data-save-vehicle-details' in text and 'saveVehicleDetails(saveDetails.dataset.saveVehicleDetails)' not in text:
+              raise SystemExit('Could not patch vehicle detail click handler')
+
+          path.write_text(text, encoding='utf-8')
+          Path('site/.pages-refresh').write_text('Refreshed GitHub Pages deployment after vehicle details editor update.\n', encoding='utf-8')
+          PY
+          python /tmp/patch_vehicle_editor.py
+
+      - name: Commit patched site
+        run: |
+          cd site
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add fleet-status.html .pages-refresh
+          git diff --cached --quiet && exit 0
+          git commit -m "Add supervisor vehicle details editor"
+          git push origin gh-pages
