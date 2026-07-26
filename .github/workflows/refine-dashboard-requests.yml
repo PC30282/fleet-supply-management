@@ -1,0 +1,50 @@
+name: Refine dashboard and request groups
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout site branch
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: site
+
+      - name: Patch pages
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          dashboard = Path('site/supervisor-dashboard.html')
+          text = dashboard.read_text(encoding='utf-8')
+          text = text.replace('if(v.status==="Reported"||v.status==="Off-Road")rows.push({title:`${formatVrm(v.vrm)} - ${v.make} ${v.model}`,status:v.status,vehicle:formatVrm(v.vrm),section:"Fleet Status",level:v.status==="Off-Road"?"red":"amber",date:v.status_updated_at,detail:v.status_reason||v.status_updated_by||"Vehicle status needs review"});', 'if(v.status==="Reported")rows.push({title:`${formatVrm(v.vrm)} - ${v.make} ${v.model}`,status:v.status,vehicle:formatVrm(v.vrm),section:"Fleet Status",level:"amber",date:v.status_updated_at,detail:v.status_reason||v.status_updated_by||"Vehicle status needs review"});', 1)
+          dashboard.write_text(text, encoding='utf-8')
+
+          index = Path('site/index.html')
+          page = index.read_text(encoding='utf-8')
+          start = page.index('function renderDashboard(){')
+          end = page.index('async function addAudit', start)
+          new_render = r'''function statusGroupStyle(status){return status==="Delivered"?"green":status==="Ordered"?"amber":status==="Cancelled"?"red":"teal"}function collapsibleStatusGroup(status,items){const open=status==="Pending"||status==="Ordered";const badge=statusGroupStyle(status);const body=currentSection==="Vehicle Equipment"?renderVehicleGroups(items):items.map(requestCard).join("");return `<details class="request-status-group" ${open?"open":""} style="border:1px solid var(--line);border-radius:8px;background:rgba(255,255,255,.72);overflow:hidden"><summary style="min-height:48px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;font-weight:900;color:var(--charcoal);list-style:none"><span>${escapeHtml(status)}</span><span class="status ${badge==='green'?'delivered':badge==='amber'?'ordered':badge==='red'?'cancelled':'made'}">${items.length} item${items.length===1?"":"s"}</span></summary><div style="display:grid;gap:10px;padding:0 10px 10px">${body||`<div class="empty">No ${escapeHtml(status.toLowerCase())} requests.</div>`}</div></details>`}function renderVehicleGroups(items){const groups=new Map();items.forEach(r=>{const key=displayVehicle(r);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(r)});return [...groups.entries()].map(([vehicle,vehicleItems])=>`<section style="display:grid;gap:8px;border:1px solid var(--line);border-radius:8px;background:#fff;padding:10px"><div style="display:flex;align-items:center;justify-content:space-between;gap:10px;font-weight:900;color:var(--charcoal);padding:2px 4px"><span>${escapeHtml(vehicle)}</span><small style="color:var(--muted);font-weight:800">${vehicleItems.length} item${vehicleItems.length===1?"":"s"}</small></div>${vehicleItems.map(requestCard).join("")}</section>`).join("")}function renderDashboard(){renderMetrics();const term=searchInput.value.trim().toLowerCase(),status=statusFilter.value,visible=requests.filter(r=>r.section===currentSection).filter(r=>status==="All"||r.status===status).filter(r=>!term||[r.item,r.vehicle,r.requester,r.notes].join(" ").toLowerCase().includes(term)).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));$("#visibleCount").textContent=`${visible.length} shown`;if(!visible.length){requestList.innerHTML=`<div class="empty">No requests found.</div>`;return}const statuses=["Pending","Ordered","Delivered","Cancelled"];requestList.innerHTML=statuses.map(groupStatus=>({status:groupStatus,items:visible.filter(r=>r.status===groupStatus)})).filter(group=>group.items.length||status===group.status).map(group=>collapsibleStatusGroup(group.status,group.items)).join("")}'''
+          page = page[:start] + new_render + page[end:]
+          index.write_text(page, encoding='utf-8')
+
+          Path('site/.pages-refresh').write_text('Request groups and dashboard attention list refined.\n', encoding='utf-8')
+          PY
+
+      - name: Commit patched site
+        run: |
+          cd site
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html supervisor-dashboard.html .pages-refresh
+          git diff --cached --quiet && exit 0
+          git commit -m "Refine dashboard actions and collapsible request groups"
+          git push origin gh-pages
