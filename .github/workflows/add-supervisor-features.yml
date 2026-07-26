@@ -1,0 +1,101 @@
+name: Add supervisor fleet features
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout site branch
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: site
+
+      - name: Patch Fleet Status and Supply pages
+        run: |
+          cat > /tmp/patch_features.py <<'PY'
+          from pathlib import Path
+
+          fleet = Path('site/fleet-status.html')
+          text = fleet.read_text(encoding='utf-8')
+
+          text = text.replace('let vehicles=[],requests=[],checklists=[],selectedId=null,adminUnlocked=false,supervisorUser=null,supervisorCollar="",draftVehicles=[],draftDirty=false,tablesReady=true;', 'let vehicles=[],requests=[],checklists=[],auditLogs=[],selectedId=null,adminUnlocked=false,supervisorUser=null,supervisorCollar="",draftVehicles=[],draftDirty=false,tablesReady=true;', 1)
+          text = text.replace('<div id="setupNotice" class="setup-warning" hidden></div>\n<div class="layout">', '<div id="setupNotice" class="setup-warning" hidden></div>\n<section class="panel due-panel" id="duePanel" hidden><div class="section-title"><h2>Checklist due</h2><small id="dueCount">0 vehicles</small></div><div class="due-list" id="dueList"></div></section>\n<div class="layout">', 1)
+          css_marker = '.vehicle-edit-note{margin:0;color:var(--muted);font-weight:800;font-size:.84rem}'
+          css_add = '.due-panel{margin-bottom:18px}.due-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px}.due-card{border:1px solid var(--line);border-left:6px solid var(--amber);border-radius:8px;background:#fff;padding:10px;text-align:left;display:grid;gap:4px}.due-card.overdue{border-left-color:var(--red)}.due-card strong{overflow-wrap:anywhere}.due-card small{color:var(--muted);font-weight:800}.audit-list{display:grid;gap:8px}.audit-card{border:1px solid var(--line);border-radius:8px;background:#fff;padding:10px 12px;display:grid;gap:4px}.audit-card strong{font-size:.9rem}.audit-card small{color:var(--muted);font-weight:800}.status-reason{border-color:#f0cf80;background:var(--amber2)}'
+          if css_add not in text:
+              text = text.replace(css_marker, css_marker + css_add, 1)
+
+          old_load = 'vehicles=await check(await db.from("fleet_vehicles").select("id,vrm,make,model,vehicle_type,status,sort_order,status_updated_at,status_updated_by,created_at").order("sort_order").order("vrm"),"Loading fleet vehicles");requests=await check(await db.from("requests").select("id,section,item,vehicle,quantity,requester,notes,status,created_at").order("created_at",{ascending:false}),"Loading requests");checklists=await check(await db.from("fleet_checklists").select("id,vehicle_id,vehicle_vrm,completed_at,completed_by,notes").order("completed_at",{ascending:false}),"Loading checklists");'
+          new_load = 'vehicles=await check(await db.from("fleet_vehicles").select("id,vrm,make,model,vehicle_type,status,status_reason,status_reason_updated_at,sort_order,status_updated_at,status_updated_by,created_at").order("sort_order").order("vrm"),"Loading fleet vehicles");requests=await check(await db.from("requests").select("id,section,item,vehicle,quantity,requester,notes,status,created_at").order("created_at",{ascending:false}),"Loading requests");checklists=await check(await db.from("fleet_checklists").select("id,vehicle_id,vehicle_vrm,completed_at,completed_by,notes").order("completed_at",{ascending:false}),"Loading checklists");auditLogs=await loadAuditLogs();'
+          text = text.replace(old_load, new_load, 1)
+
+          anchor = 'async function check(result,action){if(result.error){console.error(action,result.error);throw result.error}return result.data}'
+          helper = 'async function loadAuditLogs(){if(!adminUnlocked)return[];const result=await db.from("audit_log").select("id,action,entity_type,entity_id,vehicle_vrm,item,details,actor,created_at").order("created_at",{ascending:false}).limit(80);if(result.error){console.warn("Loading audit log",result.error);return[]}return result.data||[]}async function addAudit(action,entityType,entityId,vehicleVrm,item,details,actor){try{await db.rpc("add_audit_log",{audit_action:action,audit_entity_type:entityType,audit_entity_id:entityId||null,audit_vehicle_vrm:vehicleVrm||null,audit_item:item||null,audit_details:details||null,audit_actor:actor||supervisorName()})}catch(error){console.warn("Audit log unavailable",error)}}'
+          if 'async function loadAuditLogs()' not in text:
+              text = text.replace(anchor, anchor + helper, 1)
+
+          old_render = 'function render(){document.body.classList.toggle("admin-on",adminUnlocked);renderMetrics();renderFleetList();renderDetail();renderManager()}'
+          new_render = 'function render(){document.body.classList.toggle("admin-on",adminUnlocked);renderMetrics();renderDueList();renderFleetList();renderDetail();renderManager()}'
+          text = text.replace(old_render, new_render, 1)
+
+          insert_after_badge = 'function checklistBadge(v){if(v?.status!=="On-Road")return "";const state=checklistState(v);return `<span class="checklist-flag ${state.badgeClass}">${escapeHtml(state.label)}</span>`}'
+          due_fn = 'function renderDueList(){const duePanel=document.querySelector("#duePanel"),dueList=document.querySelector("#dueList"),dueCount=document.querySelector("#dueCount");if(!duePanel||!dueList)return;const due=vehicles.filter(v=>v.status==="On-Road").map(v=>({vehicle:v,state:checklistState(v),check:latestChecklist(v)})).filter(x=>x.state.badgeClass!=="ok");duePanel.hidden=!due.length;if(dueCount)dueCount.textContent=`${due.length} vehicle${due.length===1?"":"s"}`;dueList.innerHTML=due.map(x=>`<button class="due-card ${x.state.badgeClass}" data-due-select="${escapeHtml(x.vehicle.id)}" type="button"><strong>${escapeHtml(formatVrm(x.vehicle.vrm))}</strong><small>${escapeHtml(x.vehicle.make)} ${escapeHtml(x.vehicle.model)}</small><span class="checklist-flag ${x.state.badgeClass}">${escapeHtml(x.state.label)}</span></button>`).join("")}'
+          if 'function renderDueList()' not in text:
+              text = text.replace(insert_after_badge, insert_after_badge + due_fn, 1)
+
+          text = text.replace('fleetList.addEventListener("click",e=>{const btn=e.target.closest("[data-select]");if(!btn)return;selectedId=btn.dataset.select;render()});', 'fleetList.addEventListener("click",e=>{const btn=e.target.closest("[data-select]");if(!btn)return;selectedId=btn.dataset.select;render()});document.addEventListener("click",e=>{const due=e.target.closest("[data-due-select]");if(!due)return;selectedId=due.dataset.dueSelect;render();vehicleDetail.scrollIntoView({behavior:"smooth",block:"start"})});', 1)
+
+          old_detail = '<div class="fact"><span>Last status update</span><strong>${escapeHtml(formatDate(v.status_updated_at))}</strong>${v.status_updated_by?`<small>By ${escapeHtml(v.status_updated_by)}</small>`:""}</div><div class="fact"><span>Make and model</span>'
+          new_detail = '<div class="fact"><span>Last status update</span><strong>${escapeHtml(formatDate(v.status_updated_at))}</strong>${v.status_updated_by?`<small>By ${escapeHtml(v.status_updated_by)}</small>`:""}</div>${v.status!=="On-Road"&&v.status_reason?`<div class="fact status-reason"><span>Status reason</span><strong>${escapeHtml(v.status_reason)}</strong>${v.status_reason_updated_at?`<small>${escapeHtml(formatDate(v.status_reason_updated_at))}</small>`:""}</div>`:""}<div class="fact"><span>Make and model</span>'
+          text = text.replace(old_detail, new_detail, 1)
+
+          old_end = '<div class="form-actions"><p class="vehicle-edit-note">Changes are only saved when you press Save.</p><button class="primary-button" data-save-vehicle-details="${escapeHtml(v.id)}" type="button">Save vehicle details</button></div></section>`}'
+          audit_panel = '<div class="form-actions"><p class="vehicle-edit-note">Changes are only saved when you press Save.</p><button class="primary-button" data-save-vehicle-details="${escapeHtml(v.id)}" type="button">Save vehicle details</button></div></section><section class="vehicle-edit-panel"><div class="section-title"><h3>Audit log</h3><small>Supervisor</small></div><div class="audit-list">${auditLogs.filter(a=>normaliseVrm(a.vehicle_vrm)===normaliseVrm(v.vrm)||a.entity_id===v.id).slice(0,8).map(a=>`<article class="audit-card"><strong>${escapeHtml(a.action)}</strong><small>${escapeHtml(formatDate(a.created_at))}${a.actor?` - ${escapeHtml(a.actor)}`:""}</small>${a.details?`<p>${escapeHtml(a.details)}</p>`:""}</article>`).join("")||`<div class="empty">No audit records for this vehicle.</div>`}</div></section>`}'
+          text = text.replace(old_end, audit_panel, 1)
+
+          old_status_fn = 'async function updateVehicleStatus(id,status){const v=vehicles.find(x=>x.id===id);if(!v)return;const previous=v.status;let clean=supervisorUser&&supervisorCollar?supervisorCollar:"";'
+          new_status_fn = 'async function updateVehicleStatus(id,status){const v=vehicles.find(x=>x.id===id);if(!v)return;const previous=v.status;const previousReason=v.status_reason||"";const reason=status!=="On-Road"?prompt(`Why is ${formatVrm(v.vrm)} being marked ${status}?`,previousReason||""):"";if(status!=="On-Road"&&(!reason||!reason.trim())){render();showToast("A reason is required for Reported or Off-Road.");return}let clean=supervisorUser&&supervisorCollar?supervisorCollar:"";'
+          text = text.replace(old_status_fn, new_status_fn, 1)
+          text = text.replace('await check(await db.rpc("update_fleet_vehicle_status",{vehicle_id:id,new_status:status,collar_number:clean}),"Updating status");', 'await check(await db.rpc("update_fleet_vehicle_status",{vehicle_id:id,new_status:status,collar_number:clean,status_reason:reason||""}),"Updating status");', 1)
+
+          text = text.replace('await loadData();showToast("Vehicle details saved.")', 'await addAudit("Vehicle details changed","fleet_vehicle",id,newVrm,null,`Updated details for ${oldVrm}`,supervisorName());await loadData();showToast("Vehicle details saved.")', 1)
+          text = text.replace('await loadData();showToast("Checklist deleted.")', 'await addAudit("Checklist deleted","fleet_checklist",id,selectedVehicle()?.vrm,null,"Checklist history record deleted",supervisorName());await loadData();showToast("Checklist deleted.")', 1)
+          text = text.replace('await loadData();showToast("Request deleted.")', 'await addAudit("Request deleted","request",id,request?.vehicle,request?.item,"Request deleted",supervisorName());await loadData();showToast("Request deleted.")', 1)
+          text = text.replace('await loadData();showToast("Request status updated.")', 'await addAudit("Request status changed","request",id,requests.find(r=>r.id===id)?.vehicle,requests.find(r=>r.id===id)?.item,`Status changed to ${status}`,supervisorName());await loadData();showToast("Request status updated.")', 1)
+
+          fleet.write_text(text, encoding='utf-8')
+
+          index = Path('site/index.html')
+          page = index.read_text(encoding='utf-8')
+          page = page.replace('<div class="filters"><input id="searchInput" placeholder="Search item, vehicle, or collar number" autocomplete="off"><select id="statusFilter">', '<div class="form-actions" style="margin-bottom:10px"><button class="quiet-button" id="exportNeededButton" type="button">Export needed CSV</button><button class="quiet-button" id="printNeededButton" type="button">Print needed list</button><button class="quiet-button" id="mergeDuplicatesButton" type="button">Merge duplicates</button></div><div class="filters"><input id="searchInput" placeholder="Search item, vehicle, or collar number" autocomplete="off"><select id="statusFilter">', 1)
+          page = page.replace('saveNotificationSettings=$("#saveNotificationSettings"),notificationNote=$("#notificationNote"),', 'saveNotificationSettings=$("#saveNotificationSettings"),notificationNote=$("#notificationNote"),exportNeededButton=$("#exportNeededButton"),printNeededButton=$("#printNeededButton"),mergeDuplicatesButton=$("#mergeDuplicatesButton"),', 1)
+          anchor2 = 'async function handleNotification(request){'
+          add_audit = 'async function addAudit(action,entityType,entityId,vehicleVrm,item,details,actor){try{await db.rpc("add_audit_log",{audit_action:action,audit_entity_type:entityType,audit_entity_id:entityId||null,audit_vehicle_vrm:vehicleVrm||null,audit_item:item||null,audit_details:details||null,audit_actor:actor||supervisorFirstName(supervisorUser)})}catch(error){console.warn("Audit log unavailable",error)}}function activeNeededRequests(){const term=searchInput.value.trim().toLowerCase();return requests.filter(r=>r.section===currentSection&&r.status!=="Delivered"&&r.status!=="Cancelled").filter(r=>!term||[r.item,r.vehicle,r.requester,r.notes].join(" ").toLowerCase().includes(term))}function neededSummaryRows(){const groups=new Map();activeNeededRequests().forEach(r=>{const key=`${r.section}|${r.item}`;if(!groups.has(key))groups.set(key,{section:r.section,item:r.item,quantity:0,vehicles:new Set()});const row=groups.get(key);row.quantity+=Number(r.quantity)||0;if(r.vehicle)row.vehicles.add(displayVehicle(r))});return [...groups.values()].sort((a,b)=>a.item.localeCompare(b.item)).map(row=>({...row,vehicles:[...row.vehicles].join(", ")}))}function downloadCsv(filename,rows){const headers=["Section","Item / sub-category","Total quantity","Vehicles"];const csv=[headers,...rows.map(r=>[r.section,r.item,r.quantity,r.vehicles])].map(row=>row.map(cell=>`"${String(cell??"").replace(/"/g,"""")}"`).join(",")).join("\\n");const blob=new Blob([csv],{type:"text/csv;charset=utf-8"}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url)}function exportNeeded(){const rows=neededSummaryRows();if(!rows.length){showToast("No active needed items to export.");return}downloadCsv(`${currentSection.replace(/\\s+/g,"-").toLowerCase()}-needed.csv`,rows);showToast("Needed list exported.")}function printNeeded(){const rows=neededSummaryRows();if(!rows.length){showToast("No active needed items to print.");return}const html=`<title>Needed items</title><body style="font-family:Arial,sans-serif;padding:24px"><h1>${escapeHtml(currentSection)} needed items</h1><table style="border-collapse:collapse;width:100%"><thead><tr><th style="text-align:left;border-bottom:1px solid #ccc;padding:8px">Item / sub-category</th><th style="text-align:left;border-bottom:1px solid #ccc;padding:8px">Total</th><th style="text-align:left;border-bottom:1px solid #ccc;padding:8px">Vehicles</th></tr></thead><tbody>${rows.map(r=>`<tr><td style="border-bottom:1px solid #eee;padding:8px">${escapeHtml(r.item)}</td><td style="border-bottom:1px solid #eee;padding:8px">${escapeHtml(r.quantity)}</td><td style="border-bottom:1px solid #eee;padding:8px">${escapeHtml(r.vehicles)}</td></tr>`).join("")}</tbody></table></body>`;const w=window.open("","_blank");w.document.write(html);w.document.close();w.print()}async function mergeDuplicates(){if(!adminUnlocked){showToast("Supervisor login required.");return}const groups=new Map();activeNeededRequests().forEach(r=>{const key=`${r.section}|${r.item.toLowerCase()}|${normaliseVrm(r.vehicle)}|${r.status}`;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(r)});let merged=0;for(const group of groups.values()){if(group.length<2)continue;const [keeper,...rest]=group,total=group.reduce((sum,r)=>sum+(Number(r.quantity)||0),0);await checkError(await db.from("requests").update({quantity:total,notes:[keeper.notes,"Merged duplicate requests"].filter(Boolean).join(". ")}).eq("id",keeper.id),"Merging requests");for(const item of rest)await checkError(await db.from("requests").delete().eq("id",item.id),"Removing duplicate request");await addAudit("Duplicate requests merged","request",keeper.id,keeper.vehicle,keeper.item,`${group.length} requests merged into quantity ${total}`,supervisorFirstName(supervisorUser));merged++}await refreshAll(true);showToast(merged?`${merged} duplicate group${merged===1?"":"s"} merged.`:"No duplicates found to merge.")}'
+          if 'function activeNeededRequests()' not in page:
+              page = page.replace(anchor2, add_audit + anchor2, 1)
+          page = page.replace('saveNotificationSettings.addEventListener("click",saveSettings);', 'saveNotificationSettings.addEventListener("click",saveSettings);exportNeededButton.addEventListener("click",exportNeeded);printNeededButton.addEventListener("click",printNeeded);mergeDuplicatesButton.addEventListener("click",mergeDuplicates);', 1)
+          page = page.replace('await checkError(await db.from("requests").update({status:e.target.value}).eq("id",id),"Updating status");await refreshAll(true);showToast("Status updated.")', 'const request=requests.find(r=>r.id===id);await checkError(await db.from("requests").update({status:e.target.value}).eq("id",id),"Updating status");await addAudit("Request status changed","request",id,request?.vehicle,request?.item,`Status changed to ${e.target.value}`,supervisorFirstName(supervisorUser));await refreshAll(true);showToast("Status updated.")', 1)
+          page = page.replace('await checkError(await db.from("requests").delete().eq("id",request.id),"Deleting request");clearDuplicateWarning();await refreshAll(true);showToast("Request deleted.")', 'await checkError(await db.from("requests").delete().eq("id",request.id),"Deleting request");await addAudit("Request deleted","request",request.id,request.vehicle,request.item,"Request deleted",supervisorFirstName(supervisorUser));clearDuplicateWarning();await refreshAll(true);showToast("Request deleted.")', 1)
+          index.write_text(page, encoding='utf-8')
+
+          Path('site/.pages-refresh').write_text('Refreshed GitHub Pages after audit, exports, merge and status reason features.\n', encoding='utf-8')
+          PY
+          python /tmp/patch_features.py
+
+      - name: Commit patched site
+        run: |
+          cd site
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add fleet-status.html index.html .pages-refresh
+          git diff --cached --quiet && exit 0
+          git commit -m "Add audit export merge and status reason features"
+          git push origin gh-pages
